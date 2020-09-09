@@ -136,12 +136,20 @@ func Main() {
 		fmt.Fprintf(&buf, " %3s %s %-60s %s\n", osBuf.Bytes(), icon, pkg, d.Why(pkg))
 	}
 
-	if !*check && !*update {
-		os.Stdout.Write(buf.Bytes())
-		return
+	daFile := filepath.Join(dir, "depaware.txt")
+	if *check {
+		was, err := ioutil.ReadFile(daFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if bytes.Equal(was, buf.Bytes()) {
+			// Success. No changes.
+			return
+		}
+		fmt.Fprintf(os.Stderr, "The list of dependencies in %s are out of date.\n", daFile)
+		os.Exit(1)
 	}
 
-	daFile := filepath.Join(dir, "depaware.txt")
 	if *update {
 		if err := ioutil.WriteFile(daFile, buf.Bytes(), 0644); err != nil {
 			log.Fatal(err)
@@ -149,7 +157,7 @@ func Main() {
 		return
 	}
 
-	log.Fatalf("TODO")
+	os.Stdout.Write(buf.Bytes())
 }
 
 type deps struct {
