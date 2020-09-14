@@ -153,7 +153,7 @@ func Main() {
 		if os.Getenv("TERM") != "dumb" {
 			opts = append(opts, write.TerminalColor())
 		}
-		fmt.Fprintf(os.Stderr, "The list of dependencies in %s are out of date.\n\n", daFile)
+		fmt.Fprintf(os.Stderr, "The list of dependencies in %s is out of date.\n\n", daFile)
 		err = diff.Text("before", "after", was, buf.Bytes(), os.Stderr, opts...)
 		if err != nil {
 			log.Fatal(err)
