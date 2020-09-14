@@ -22,6 +22,9 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/pkg/diff"
+	"github.com/pkg/diff/write"
 )
 
 // the go list -json format (parts we care about)
@@ -146,7 +149,15 @@ func Main() {
 			// Success. No changes.
 			return
 		}
-		fmt.Fprintf(os.Stderr, "The list of dependencies in %s are out of date.\n", daFile)
+		var opts []write.Option
+		if os.Getenv("TERM") != "dumb" {
+			opts = append(opts, write.TerminalColor())
+		}
+		fmt.Fprintf(os.Stderr, "The list of dependencies in %s are out of date.\n\n", daFile)
+		err = diff.Text("before", "after", was, buf.Bytes(), os.Stderr, opts...)
+		if err != nil {
+			log.Fatal(err)
+		}
 		os.Exit(1)
 	}
 
