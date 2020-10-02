@@ -10,14 +10,11 @@ package depaware
 
 import (
 	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -25,16 +22,9 @@ import (
 
 	"github.com/pkg/diff"
 	"github.com/pkg/diff/write"
+	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/imports"
 )
-
-// the go list -json format (parts we care about)
-type jsonOutput struct {
-	Dir        string
-	ImportPath string
-	Imports    []string
-	Deps       []string
-}
 
 var (
 	check  = flag.Bool("check", false, "if true, check whether dependencies match the depaware.txt file")
@@ -44,68 +34,55 @@ var (
 
 func Main() {
 	flag.Parse()
-	if flag.NArg() != 1 {
-		fmt.Fprintf(os.Stderr, "Usage: depaware [flags] <package-name>\n")
-		os.Exit(1)
-	}
-	pkg := flag.Arg(0)
-
 	if *check && *update {
 		log.Fatalf("-check and -update can't be used together")
 	}
 
+	ipaths, err := pkgPaths(flag.Args()...)
+	if err != nil {
+		log.Fatalf("could not resolve packages: %v", err)
+	}
+	for i, pkg := range ipaths {
+		process(pkg)
+		// If we're printing to stdout, and there are more packages to come,
+		// add an extra newline.
+		if i != len(ipaths)-1 && !*check && !*update {
+			fmt.Println()
+		}
+	}
+}
+
+func process(pkg string) {
 	geese := strings.Split(*osList, ",")
 	var d deps
 	var dir string
 	for _, goos := range geese {
-		cmd := exec.Command("go", "list", "-json", pkg)
-		cmd.Env = append(os.Environ(), "GOARCH=amd64", "GOOS="+goos, "CGO_ENABLED=1")
-		cmd.Stderr = os.Stderr
-		out, err := cmd.Output()
-		if err != nil {
-			log.Fatal(err)
+		cfg := &packages.Config{
+			Mode: packages.NeedImports | packages.NeedDeps | packages.NeedFiles | packages.NeedName,
+			Env:  []string{"GOARCH=amd64", "GOOS=" + goos, "CGO_ENABLED=1"},
 		}
 
-		var meta jsonOutput
-		if err := json.Unmarshal(out, &meta); err != nil {
-			log.Fatalf("bogus output from go list -json: %v", err)
-		}
-		if dir == "" {
-			dir = meta.Dir
-		}
-		if strings.HasPrefix(pkg, ".") {
-			pkg = meta.ImportPath
-		}
-
-		for _, target := range meta.Imports {
-			d.AddEdge(meta.ImportPath, target)
-		}
-		for _, depPkg := range meta.Deps {
-			d.AddDep(depPkg, goos)
-		}
-
-		cmd = exec.Command("go", "list", "-json")
-		cmd.Env = append(os.Environ(), "GOARCH=amd64", "GOOS="+goos, "CGO_ENABLED=1")
-		cmd.Args = append(cmd.Args, meta.Deps...)
-		cmd.Stderr = os.Stderr
-		out, err = cmd.Output()
+		pkgs, err := packages.Load(cfg, pkg)
 		if err != nil {
 			log.Fatalf("for GOOS=%v: %v", goos, err)
 		}
-		jd := json.NewDecoder(bytes.NewReader(out))
-		for {
-			var meta jsonOutput
-			err := jd.Decode(&meta)
-			if err == io.EOF {
-				break
+
+		packages.Visit(pkgs, nil, func(p *packages.Package) {
+			for imp := range p.Imports {
+				d.AddEdge(p.PkgPath, imp)
 			}
-			if err != nil {
-				log.Fatal(err)
+			if p.PkgPath == pkg {
+				if dir == "" && len(p.GoFiles) > 0 {
+					dir = filepath.Dir(p.GoFiles[0])
+				}
+				return
 			}
-			for _, target := range meta.Imports {
-				d.AddEdge(meta.ImportPath, target)
-			}
-		}
+			d.AddDep(p.PkgPath, goos)
+		})
+	}
+
+	if dir == "" {
+		log.Fatalf("no .go files found for package %s", pkg)
 	}
 
 	sort.Slice(d.Deps, func(i, j int) bool {
@@ -130,7 +107,7 @@ func Main() {
 		}
 		osBuf.Reset()
 		for _, goos := range geese {
-			if d.DepOnOS[pkg][goos] {
+			if d.DepOnOS[pkgGOOS{pkg, goos}] {
 				osBuf.WriteRune(unicode.ToUpper(rune(goos[0])))
 			}
 		}
@@ -172,9 +149,14 @@ func Main() {
 	os.Stdout.Write(buf.Bytes())
 }
 
+type pkgGOOS struct {
+	pkg  string
+	goos string
+}
+
 type deps struct {
 	Deps    []string
-	DepOnOS map[string]map[string]bool // pkg -> goos -> true
+	DepOnOS map[pkgGOOS]bool // {pkg, goos} -> true
 
 	DepTo      map[string][]string // pkg in key is imported by packages in value
 	UsesUnsafe map[string]bool
@@ -217,12 +199,9 @@ func (d *deps) AddDep(pkg, goos string) {
 		d.Deps = append(d.Deps, pkg)
 	}
 	if d.DepOnOS == nil {
-		d.DepOnOS = map[string]map[string]bool{}
+		d.DepOnOS = map[pkgGOOS]bool{}
 	}
-	if d.DepOnOS[pkg] == nil {
-		d.DepOnOS[pkg] = map[string]bool{}
-	}
-	d.DepOnOS[pkg][goos] = true
+	d.DepOnOS[pkgGOOS{pkg, goos}] = true
 }
 
 func stringsContains(ss []string, s string) bool {
@@ -244,4 +223,17 @@ func isBoringPackage(pkg string) bool {
 func isGoPackage(pkg string) bool {
 	return !strings.Contains(pkg, ".") ||
 		strings.Contains(pkg, "golang.org/x")
+}
+
+// pkgPaths resolves pkg to a slice of Go package import paths.
+// See https://golang.org/issue/30826 and https://golang.org/issue/30828.
+func pkgPaths(pkg ...string) (ipaths []string, err error) {
+	pkgs, err := packages.Load(nil, pkg...)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range pkgs {
+		ipaths = append(ipaths, p.PkgPath)
+	}
+	return ipaths, nil
 }
