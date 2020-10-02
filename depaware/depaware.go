@@ -203,7 +203,7 @@ func (d *deps) AddEdge(from, to string) {
 	if !stringsContains(d.DepTo[to], from) {
 		d.DepTo[to] = append(d.DepTo[to], from)
 	}
-	if to == "unsafe" {
+	if to == "unsafe" || to == "C" {
 		d.UsesUnsafe[from] = true
 	}
 }
@@ -237,7 +237,7 @@ func stringsContains(ss []string, s string) bool {
 func isBoringPackage(pkg string) bool {
 	return strings.HasPrefix(pkg, "internal/") ||
 		strings.HasPrefix(pkg, "runtime/internal/") ||
-		pkg == "runtime" ||
+		pkg == "runtime" || pkg == "runtime/cgo" || pkg == "unsafe" ||
 		(strings.Contains(pkg, "/internal/") && isGoPackage(pkg))
 }
 

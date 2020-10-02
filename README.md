@@ -7,7 +7,7 @@ https://github.com/tailscale/tailscale/blob/main/cmd/tailscaled/depaware.txt
 
 Then you and others can easily see what your dependencies are, how
 they vary by operating system (the letters L(inux), D(arwin),
-W(indows) in the left column), and whether they use unsafe (bomb
+W(indows) in the left column), and whether they use unsafe/cgo (bomb
 icon).
 
 Then you hook it up to your CI so it's a build breakage if they're not up to date:
