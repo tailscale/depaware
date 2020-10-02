@@ -25,6 +25,7 @@ import (
 
 	"github.com/pkg/diff"
 	"github.com/pkg/diff/write"
+	"golang.org/x/tools/imports"
 )
 
 // the go list -json format (parts we care about)
@@ -193,6 +194,8 @@ func (d *deps) Why(pkg string) string {
 }
 
 func (d *deps) AddEdge(from, to string) {
+	from = imports.VendorlessPath(from)
+	to = imports.VendorlessPath(to)
 	if d.DepTo == nil {
 		d.DepTo = make(map[string][]string)
 		d.UsesUnsafe = make(map[string]bool)
@@ -206,6 +209,7 @@ func (d *deps) AddEdge(from, to string) {
 }
 
 func (d *deps) AddDep(pkg, goos string) {
+	pkg = imports.VendorlessPath(pkg)
 	if isBoringPackage(pkg) {
 		return
 	}
