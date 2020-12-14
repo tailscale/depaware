@@ -59,9 +59,11 @@ func process(pkg string) {
 	var d deps
 	var dir string
 	for _, goos := range geese {
+		env := os.Environ()
+		env = append(env, "GOARCH=amd64", "GOOS="+goos, "CGO_ENABLED=1")
 		cfg := &packages.Config{
 			Mode: packages.NeedImports | packages.NeedDeps | packages.NeedFiles | packages.NeedName,
-			Env:  []string{"GOARCH=amd64", "GOOS=" + goos, "CGO_ENABLED=1"},
+			Env:  env,
 		}
 
 		pkgs, err := packages.Load(cfg, pkg)
