@@ -144,7 +144,8 @@ func process(pkg string) {
 			return
 		}
 		var opts []write.Option
-		if os.Getenv("TERM") != "dumb" {
+		const wantColor = false // https://github.com/tailscale/depaware/issues/11
+		if wantColor && os.Getenv("TERM") != "dumb" {
 			opts = append(opts, write.TerminalColor())
 		}
 		fmt.Fprintf(os.Stderr, "The list of dependencies in %s is out of date.\n\n", daFile)
