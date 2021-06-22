@@ -44,6 +44,11 @@ func Main() {
 	if err != nil {
 		log.Fatalf("could not resolve packages: %v", err)
 	}
+	for _, pkg := range ipaths {
+		if strings.HasPrefix(pkg, "-") {
+			log.Fatalf("bogus package argument %q; flags go before packages", pkg)
+		}
+	}
 	for i, pkg := range ipaths {
 		process(pkg)
 		// If we're printing to stdout, and there are more packages to come,
