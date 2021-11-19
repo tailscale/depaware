@@ -2,13 +2,22 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// TODO: interface types are only used if their itab is used
+// TODO: other types are used if ... something? errorsString. pcln table?
+// TODO: go:linkname
+// TODO: gofmt
+
 package depaware
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"os"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -40,14 +49,37 @@ func dumpSource(pkgMain string) {
 }
 
 type walker struct {
-	done map[string]bool
+	done    map[string]bool
+	symLive map[string]bool
+}
+
+func (w *walker) dead(sym string) bool {
+	if !w.symLive[sym] {
+		log.Printf("DEAD: %q\n", sym)
+		return true
+	}
+	return false
 }
 
 func (w *walker) walk(mainPkg string) {
+	buildErrc := make(chan error, 1)
+	go func() {
+		var err error
+		w.symLive, err = buildGenLive(mainPkg)
+		j, _ := json.MarshalIndent(w.symLive, "", "\t")
+		log.Printf("live: %s", j)
+		buildErrc <- err
+	}()
+
 	pkgs, err := packages.Load(cfg, mainPkg)
 	if err != nil {
-		log.Fatalf("packages.Load: %v", err)
+		log.Fatal(err)
 	}
+
+	if err := <-buildErrc; err != nil {
+		log.Fatalf("building: %v", err)
+	}
+
 	for _, pkg := range pkgs {
 		w.walkPackage(pkg)
 	}
@@ -105,8 +137,8 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 		pre := func(c *astutil.Cursor) bool {
 			depth++
 			n := c.Node()
-			indent := strings.Repeat("  ", depth)
-			log.Printf("%sNode: %T", indent, n)
+			//indent := strings.Repeat("  ", depth)
+			//log.Printf("%sNode: %T", indent, n)
 			switch n := n.(type) {
 			case *ast.GenDecl:
 				genDecl := n
@@ -118,9 +150,8 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 						// Nothing (yet?)
 					case *ast.TypeSpec:
 						name := typeName(pkg, spec)
-						log.Printf("%stype %q", indent, name)
-						switch name {
-						case "main.UnusedType", "main.UnusedFactoredType":
+						//						log.Printf("%stype %q", indent, name)
+						if w.dead(name) {
 							start, end := offsetRange(pkg.Fset, spec)
 							dels = append(dels, delRange{start, end})
 						}
@@ -139,14 +170,13 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 				}
 			case *ast.FuncDecl:
 				name := funcName(pkg, n)
-				log.Printf("%sfunc %q comment = %p", indent, name, n.Doc)
-				switch name {
-				case "main.AnotherUnused", "main.Bar":
+				//log.Printf("%sfunc %q comment = %p", indent, name, n.Doc)
+				if w.dead(name) {
 					start, end := offsetRange(pkg.Fset, n)
 					editBuf.Delete(start, end)
 					return false
 				}
-				log.Printf("%sFunc: %v", indent, name)
+				//log.Printf("%sFunc: %v", indent, name)
 			}
 			return true
 		}
@@ -180,7 +210,7 @@ func funcName(pkg *packages.Package, fd *ast.FuncDecl) string {
 		buf.WriteByte(')')
 		typPart := buf.Bytes()
 		if typPart[1] != '*' {
-			typPart = typPart[1 : len(typPart)-2]
+			typPart = typPart[1 : len(typPart)-1]
 		}
 		return fmt.Sprintf("%s.%s.%s", pkgName, typPart, fd.Name.Name)
 	}
@@ -192,6 +222,9 @@ func offset(fset *token.FileSet, pos token.Pos) int {
 }
 
 func offsetRange(fset *token.FileSet, n ast.Node) (start, end int) {
+	defer func() {
+		log.Printf("offSetRange of %T = %v, %v", n, start, end)
+	}()
 	startPos, endPos := n.Pos(), n.End()
 	switch n := n.(type) {
 	case *ast.FuncDecl:
@@ -217,3 +250,57 @@ func offsetRange(fset *token.FileSet, n ast.Node) (start, end int) {
 }
 
 type delRange struct{ start, end int }
+
+func buildGenLive(pkgpath string) (map[string]bool, error) {
+	tmp, err := ioutil.TempFile("", "")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(tmp.Name())
+	// Build
+	{
+		cmd := exec.Command("go", "build", "-o", tmp.Name(), "-gcflags=all=-N -l", pkgpath)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("%v: %s\n%w", cmd, out, err)
+		}
+	}
+
+	cmd := exec.Command("go", "tool", "nm", tmp.Name())
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	syms := make(map[string]bool)
+	scan := bufio.NewScanner(out)
+	for scan.Scan() {
+		parts := bytes.Fields(scan.Bytes())
+		if len(parts) != 3 {
+			continue
+		}
+		name := string(parts[2])
+		if strings.Contains(name, "..") {
+			// generated algs, inittask, gobytes, anonymous functions
+			continue
+		}
+		if strings.Contains(name, ",") {
+			// go.itab entry
+			continue
+		}
+		if strings.HasPrefix(name, "$") {
+			// floating point constant
+			continue
+		}
+		syms[name] = true
+	}
+	if scan.Err() != nil {
+		return nil, err
+	}
+	if err := cmd.Wait(); err != nil {
+		return nil, err
+	}
+	return syms, nil
+}
