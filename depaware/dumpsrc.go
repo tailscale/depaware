@@ -5,14 +5,15 @@
 package depaware
 
 import (
-	"bytes"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"sort"
 
 	"go/ast"
-	"go/format"
+	"go/token"
 
+	"github.com/tailscale/depaware/internal/edit"
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/packages"
 )
@@ -86,15 +87,25 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 
 	for i, f := range pkg.Syntax {
 		fileName := pkg.GoFiles[i]
+
+		src, err := ioutil.ReadFile(fileName)
+		if err != nil {
+			log.Fatal(err)
+		}
+		editBuf := edit.NewBuffer(src)
+
 		pre := func(c *astutil.Cursor) bool {
 			n := c.Node()
 			//log.Printf("Node: %T", n)
 			switch n := n.(type) {
 			case *ast.FuncDecl:
 				name := funcName(pkg, n)
+				log.Printf("func %q comment = %p", name, n.Doc)
 				switch name {
 				case "AnotherUnused", "Bar":
-					c.Delete()
+					start, end := offsetRange(pkg.Fset, n)
+					editBuf.Delete(start, end)
+
 					// TODO: incr/decr a delete
 					// count when on pre/post hook
 					// and start deleting on entry
@@ -113,12 +124,8 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 			}
 			return true
 		}
-		f = astutil.Apply(f, pre, nil).(*ast.File)
-		var buf bytes.Buffer
-		if err := format.Node(&buf, pkg.Fset, f); err != nil {
-			log.Fatalf("formatting %v: %v", fileName, err)
-		}
-		fmt.Printf("// Source of %s:\n\n%s\n", fileName, buf.Bytes())
+		astutil.Apply(f, pre, nil)
+		fmt.Printf("// Source of %s:\n\n%s\n", fileName, editBuf.Bytes())
 	}
 
 	for _, p := range imports {
@@ -131,4 +138,19 @@ func funcName(pkg *packages.Package, fd *ast.FuncDecl) string {
 		// TODO: methods
 	}
 	return fd.Name.Name
+}
+
+func offset(fset *token.FileSet, pos token.Pos) int {
+	return fset.PositionFor(pos, false).Offset
+}
+
+func offsetRange(fset *token.FileSet, n ast.Node) (start, end int) {
+	startPos, endPos := n.Pos(), n.End()
+	switch n := n.(type) {
+	case *ast.FuncDecl:
+		if n.Doc != nil {
+			startPos = n.Doc.Pos()
+		}
+	}
+	return offset(fset, startPos), offset(fset, endPos)
 }
