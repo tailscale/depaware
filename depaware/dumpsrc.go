@@ -5,12 +5,15 @@
 package depaware
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"sort"
+	"strings"
 
 	"go/ast"
+	"go/printer"
 	"go/token"
 
 	"github.com/tailscale/depaware/internal/edit"
@@ -94,37 +97,60 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 		}
 		editBuf := edit.NewBuffer(src)
 
+		depth := 0
+		post := func(c *astutil.Cursor) bool {
+			depth--
+			return true
+		}
 		pre := func(c *astutil.Cursor) bool {
+			depth++
 			n := c.Node()
-			//log.Printf("Node: %T", n)
+			indent := strings.Repeat("  ", depth)
+			log.Printf("%sNode: %T", indent, n)
 			switch n := n.(type) {
+			case *ast.GenDecl:
+				genDecl := n
+
+				var dels []delRange
+				for _, spec := range n.Specs {
+					switch spec := spec.(type) {
+					case *ast.ImportSpec:
+						// Nothing (yet?)
+					case *ast.TypeSpec:
+						name := typeName(pkg, spec)
+						log.Printf("%stype %q", indent, name)
+						switch name {
+						case "main.UnusedType", "main.UnusedFactoredType":
+							start, end := offsetRange(pkg.Fset, spec)
+							dels = append(dels, delRange{start, end})
+						}
+					case *ast.ValueSpec:
+						// Consts and vars.
+					}
+				}
+				if len(dels) == len(n.Specs) {
+					// Delete the whole genspec.
+					start, end := offsetRange(pkg.Fset, genDecl)
+					editBuf.Delete(start, end)
+				} else {
+					for _, del := range dels {
+						editBuf.Delete(del.start, del.end)
+					}
+				}
 			case *ast.FuncDecl:
 				name := funcName(pkg, n)
-				log.Printf("func %q comment = %p", name, n.Doc)
+				log.Printf("%sfunc %q comment = %p", indent, name, n.Doc)
 				switch name {
-				case "AnotherUnused", "Bar":
+				case "main.AnotherUnused", "main.Bar":
 					start, end := offsetRange(pkg.Fset, n)
 					editBuf.Delete(start, end)
-
-					// TODO: incr/decr a delete
-					// count when on pre/post hook
-					// and start deleting on entry
-					// to unused, then
-					// Cursor.Delete everything
-					// inside (including comments
-					// apparently) and then stop
-					// deleting once isDeleting
-					// drops back to zero?
-					//
-					// Because right now comments inside
-					// deleted funcs get promoted to top-level.
 					return false
 				}
-				log.Printf("Func: %v", name)
+				log.Printf("%sFunc: %v", indent, name)
 			}
 			return true
 		}
-		astutil.Apply(f, pre, nil)
+		astutil.Apply(f, pre, post)
 		fmt.Printf("// Source of %s:\n\n%s\n", fileName, editBuf.Bytes())
 	}
 
@@ -133,11 +159,32 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 	}
 }
 
-func funcName(pkg *packages.Package, fd *ast.FuncDecl) string {
-	if fd.Recv != nil {
-		// TODO: methods
+func pkgSym(pkg *packages.Package) string {
+	if pkg.Name == "main" {
+		return "main"
 	}
-	return fd.Name.Name
+	return pkg.PkgPath
+}
+
+func typeName(pkg *packages.Package, ts *ast.TypeSpec) string {
+	return pkgSym(pkg) + "." + ts.Name.Name
+}
+
+func funcName(pkg *packages.Package, fd *ast.FuncDecl) string {
+	pkgName := pkgSym(pkg)
+	if fd.Recv != nil {
+		var buf bytes.Buffer
+		buf.WriteByte('(')
+		typ := fd.Recv.List[0].Type
+		printer.Fprint(&buf, pkg.Fset, typ)
+		buf.WriteByte(')')
+		typPart := buf.Bytes()
+		if typPart[1] != '*' {
+			typPart = typPart[1 : len(typPart)-2]
+		}
+		return fmt.Sprintf("%s.%s.%s", pkgName, typPart, fd.Name.Name)
+	}
+	return pkgName + "." + fd.Name.Name
 }
 
 func offset(fset *token.FileSet, pos token.Pos) int {
@@ -151,6 +198,22 @@ func offsetRange(fset *token.FileSet, n ast.Node) (start, end int) {
 		if n.Doc != nil {
 			startPos = n.Doc.Pos()
 		}
+	case *ast.TypeSpec:
+		if n.Doc != nil {
+			startPos = n.Doc.Pos()
+		}
+	case *ast.ValueSpec:
+		if n.Doc != nil {
+			startPos = n.Doc.Pos()
+		}
+	case *ast.GenDecl:
+		if n.Doc != nil {
+			startPos = n.Doc.Pos()
+		}
+	default:
+		panic(fmt.Sprintf("unhandled type %T", n))
 	}
 	return offset(fset, startPos), offset(fset, endPos)
 }
+
+type delRange struct{ start, end int }
