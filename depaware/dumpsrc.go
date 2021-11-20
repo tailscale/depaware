@@ -5,7 +5,6 @@
 // TODO: interface types are only used if their itab is used
 // TODO: other types are used if ... something? errorsString. pcln table?
 // TODO: go:linkname
-// TODO: gofmt
 
 package depaware
 
@@ -22,6 +21,7 @@ import (
 	"strings"
 
 	"go/ast"
+	"go/format"
 	"go/printer"
 	"go/token"
 
@@ -181,7 +181,12 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 			return true
 		}
 		astutil.Apply(f, pre, post)
-		fmt.Printf("// Source of %s:\n\n%s\n", fileName, editBuf.Bytes())
+
+		src = editBuf.Bytes()
+		if fmtSrc, err := format.Source(src); err == nil {
+			src = fmtSrc
+		}
+		fmt.Printf("// Source of %s:\n\n%s\n", fileName, src)
 	}
 
 	for _, p := range imports {
