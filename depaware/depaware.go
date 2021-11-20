@@ -29,13 +29,19 @@ import (
 )
 
 var (
-	check  = flag.Bool("check", false, "if true, check whether dependencies match the depaware.txt file")
-	update = flag.Bool("update", false, "if true, update the depaware.txt file")
-	osList = flag.String("goos", "linux,darwin,windows", "comma-separated list of GOOS values")
+	check   = flag.Bool("check", false, "if true, check whether dependencies match the depaware.txt file")
+	update  = flag.Bool("update", false, "if true, update the depaware.txt file")
+	dumpSrc = flag.Bool("dumpsrc", false, "if non-empty, dump the source of package")
+	osList  = flag.String("goos", "linux,darwin,windows", "comma-separated list of GOOS values")
 )
 
 func Main() {
 	flag.Parse()
+	if *dumpSrc {
+		if *check || *update {
+			log.Fatalf("-check and -update can't be use with -dumpsrc")
+		}
+	}
 	if *check && *update {
 		log.Fatalf("-check and -update can't be used together")
 	}
@@ -50,6 +56,10 @@ func Main() {
 		}
 	}
 	for i, pkg := range ipaths {
+		if *dumpSrc {
+			dumpSource(pkg)
+			continue
+		}
 		process(pkg)
 		// If we're printing to stdout, and there are more packages to come,
 		// add an extra newline.

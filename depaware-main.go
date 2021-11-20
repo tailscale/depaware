@@ -13,7 +13,9 @@
 // See https://github.com/tailscale/depaware
 package main
 
-import "github.com/tailscale/depaware/depaware"
+import (
+	"github.com/tailscale/depaware/depaware"
+)
 
 func main() {
 	depaware.Main()
