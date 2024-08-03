@@ -29,9 +29,10 @@ import (
 )
 
 var (
-	check  = flag.Bool("check", false, "if true, check whether dependencies match the depaware.txt file")
-	update = flag.Bool("update", false, "if true, update the depaware.txt file")
-	osList = flag.String("goos", "linux,darwin,windows", "comma-separated list of GOOS values")
+	check    = flag.Bool("check", false, "if true, check whether dependencies match the depaware.txt file")
+	update   = flag.Bool("update", false, "if true, update the depaware.txt file")
+	fileName = flag.String("file", "depaware.txt", "name of the file to write")
+	osList   = flag.String("goos", "linux,darwin,windows", "comma-separated list of GOOS values")
 )
 
 func Main() {
@@ -107,7 +108,7 @@ func process(pkg string) {
 
 	// Parse existing depaware.txt, if present,
 	// to get the existing dependency source the file lists.
-	daFile := filepath.Join(dir, "depaware.txt")
+	daFile := filepath.Join(dir, *fileName)
 	daContents, daErr := ioutil.ReadFile(daFile)
 	var preferredWhy map[string]string
 	if daErr == nil {
