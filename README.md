@@ -12,7 +12,7 @@ icon).
 
 Then you hook it up to your CI so it's a build breakage if they're not up to date:
 
-https://github.com/tailscale/tailscale/blob/main/.github/workflows/depaware.yml
+https://github.com/tailscale/tailscale/blob/93324cc7b3/.github/workflows/depaware.yml
 
 Then during code review you'll see in your review whether/how your
 dependencies changed, and you can decide whether that's appropriate.
