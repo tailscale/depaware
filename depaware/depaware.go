@@ -33,6 +33,7 @@ var (
 	update   = flag.Bool("update", false, "if true, update the depaware.txt file")
 	fileName = flag.String("file", "depaware.txt", "name of the file to write")
 	osList   = flag.String("goos", "linux,darwin,windows", "comma-separated list of GOOS values")
+	tags     = flag.String("tags", "", "comma-separated list of build tags to use when loading packages")
 )
 
 func Main() {
@@ -64,12 +65,17 @@ func process(pkg string) {
 	geese := strings.Split(*osList, ",")
 	var d deps
 	var dir string
+	var buildFlags []string
+	if *tags != "" {
+		buildFlags = append(buildFlags, "-tags", *tags)
+	}
 	for _, goos := range geese {
 		env := os.Environ()
 		env = append(env, "GOARCH=amd64", "GOOS="+goos, "CGO_ENABLED=1")
 		cfg := &packages.Config{
-			Mode: packages.NeedImports | packages.NeedDeps | packages.NeedFiles | packages.NeedName,
-			Env:  env,
+			Mode:       packages.NeedImports | packages.NeedDeps | packages.NeedFiles | packages.NeedName,
+			Env:        env,
+			BuildFlags: buildFlags,
 		}
 
 		pkgs, err := packages.Load(cfg, pkg)
