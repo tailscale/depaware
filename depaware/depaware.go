@@ -34,6 +34,7 @@ var (
 	fileName = flag.String("file", "depaware.txt", "name of the file to write")
 	osList   = flag.String("goos", "linux,darwin,windows", "comma-separated list of GOOS values")
 	tags     = flag.String("tags", "", "comma-separated list of build tags to use when loading packages")
+	internal = flag.Bool("internal", false, "if true, include internal packages in the output")
 )
 
 func Main() {
@@ -231,7 +232,7 @@ func (d *deps) AddEdge(from, to string) {
 
 func (d *deps) AddDep(pkg, goos string) {
 	pkg = imports.VendorlessPath(pkg)
-	if isBoringPackage(pkg) {
+	if !*internal && isInternalPackage(pkg) {
 		return
 	}
 	if !stringsContains(d.Deps, pkg) {
@@ -252,7 +253,7 @@ func stringsContains(ss []string, s string) bool {
 	return false
 }
 
-func isBoringPackage(pkg string) bool {
+func isInternalPackage(pkg string) bool {
 	return strings.HasPrefix(pkg, "internal/") ||
 		strings.HasPrefix(pkg, "runtime/internal/") ||
 		pkg == "runtime" || pkg == "runtime/cgo" || pkg == "unsafe" ||
