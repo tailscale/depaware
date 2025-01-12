@@ -18,6 +18,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"unicode"
@@ -42,6 +43,7 @@ func Main() {
 	if *check && *update {
 		log.Fatalf("-check and -update can't be used together")
 	}
+	setGoBinaryPath()
 
 	ipaths, err := pkgPaths(flag.Args()...)
 	if err != nil {
@@ -312,4 +314,12 @@ func parsePreferredWhy(r io.Reader) map[string]string {
 		m[string(dep)] = string(src)
 	}
 	return m
+}
+
+// setGoBinaryPath makes the go binary executed by go/packages
+// match the go binary that depaware was compiled with.
+func setGoBinaryPath() {
+	binDir := filepath.Join(runtime.GOROOT(), "bin")
+	pathEnv := fmt.Sprintf("%s%c%s", binDir, os.PathListSeparator, os.Getenv("PATH"))
+	os.Setenv("PATH", pathEnv)
 }
