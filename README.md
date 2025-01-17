@@ -17,7 +17,7 @@ https://github.com/tailscale/tailscale/blob/93324cc7b3/.github/workflows/depawar
 Then during code review you'll see in your review whether/how your
 dependencies changed, and you can decide whether that's appropriate.
 
-You'll probably want to pin a specific vesion of the depaware tool in your go.mod file
-that survives a "go mod tidy". You can add a file like this to your project:
+You'll probably want to pin a specific version of the depaware tool in your go.mod file
+that it survives a "go mod tidy". You can add a file like this to your project:
 
 https://github.com/tailscale/tailscale/commit/7795fcf4649ce4ddc2a5b345cb56516fa161b4b3
