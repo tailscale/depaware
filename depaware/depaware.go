@@ -29,12 +29,13 @@ import (
 )
 
 var (
-	check    = flag.Bool("check", false, "if true, check whether dependencies match the depaware.txt file")
-	update   = flag.Bool("update", false, "if true, update the depaware.txt file")
-	fileName = flag.String("file", "depaware.txt", "name of the file to write")
-	osList   = flag.String("goos", "linux,darwin,windows", "comma-separated list of GOOS values")
-	tags     = flag.String("tags", "", "comma-separated list of build tags to use when loading packages")
-	internal = flag.Bool("internal", false, "if true, include internal packages in the output")
+	check      = flag.Bool("check", false, "if true, check whether dependencies match the depaware.txt file")
+	update     = flag.Bool("update", false, "if true, update the depaware.txt file")
+	fileName   = flag.String("file", "depaware.txt", "name of the file to write")
+	osList     = flag.String("goos", "linux,darwin,windows", "comma-separated list of GOOS values")
+	tags       = flag.String("tags", "", "comma-separated list of build tags to use when loading packages")
+	internal   = flag.Bool("internal", false, "if true, include internal packages in the output")
+	showVendor = flag.Bool("vendor", false, "if true, show the vendor/ prefix in import paths")
 )
 
 func Main() {
@@ -85,8 +86,8 @@ func process(pkg string) {
 		}
 
 		packages.Visit(pkgs, nil, func(p *packages.Package) {
-			for imp := range p.Imports {
-				d.AddEdge(p.PkgPath, imp)
+			for _, impPkg := range p.Imports {
+				d.AddEdge(p.PkgPath, impPkg.PkgPath)
 			}
 			if p.PkgPath == pkg {
 				if dir == "" && len(p.GoFiles) > 0 {
@@ -216,8 +217,10 @@ func (d *deps) Why(pkg string, preferredWhy map[string]string) string {
 }
 
 func (d *deps) AddEdge(from, to string) {
-	from = imports.VendorlessPath(from)
-	to = imports.VendorlessPath(to)
+	if !*showVendor {
+		from = imports.VendorlessPath(from)
+		to = imports.VendorlessPath(to)
+	}
 	if d.DepTo == nil {
 		d.DepTo = make(map[string][]string)
 		d.UsesUnsafe = make(map[string]bool)
@@ -231,7 +234,9 @@ func (d *deps) AddEdge(from, to string) {
 }
 
 func (d *deps) AddDep(pkg, goos string) {
-	pkg = imports.VendorlessPath(pkg)
+	if !*showVendor {
+		pkg = imports.VendorlessPath(pkg)
+	}
 	if !*internal && isInternalPackage(pkg) {
 		return
 	}
