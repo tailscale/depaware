@@ -26,6 +26,7 @@ import (
 
 	"go/ast"
 	"go/format"
+	"go/parser"
 	"go/printer"
 	"go/token"
 
@@ -250,6 +251,11 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 			src = fmtSrc
 		}
 
+		// Skip files with no remaining top-level declarations.
+		if fileIsEmpty(src) {
+			continue
+		}
+
 		relPath := fileName
 		if pkg.Module != nil && pkg.Module.Dir != "" {
 			if rel, err := filepath.Rel(pkg.Module.Dir, fileName); err == nil {
@@ -339,6 +345,30 @@ func offsetRange(fset *token.FileSet, n ast.Node) (start, end int) {
 }
 
 type delRange struct{ start, end int }
+
+// fileIsEmpty reports whether src contains no top-level declarations
+// other than imports (i.e. only comments, package clause, and imports).
+func fileIsEmpty(src []byte) bool {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", src, parser.ImportsOnly)
+	if err != nil {
+		return false
+	}
+	// parser.ImportsOnly stops after imports, so f.Decls only contains
+	// import GenDecls. Compare against the full file size: if the file
+	// has more content after the imports section, it has real decls.
+	endPos := fset.Position(f.Package).Offset + len("package ") + len(f.Name.Name)
+	for _, d := range f.Decls {
+		end := fset.Position(d.End()).Offset
+		if end > endPos {
+			endPos = end
+		}
+	}
+	// Check if there's any non-whitespace/comment content after the
+	// last import (or package clause if no imports).
+	rest := bytes.TrimSpace(src[endPos:])
+	return len(rest) == 0
+}
 
 // goVersion returns the Go version number without the "go" prefix
 // (e.g. "1.26.1").
