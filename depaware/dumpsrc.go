@@ -11,12 +11,10 @@ package depaware
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -28,104 +26,91 @@ import (
 	"github.com/tailscale/depaware/internal/edit"
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/txtar"
 )
 
-var cfg = &packages.Config{
-	Mode: (0 |
-		packages.NeedName |
-		packages.NeedFiles |
-		packages.NeedCompiledGoFiles |
-		packages.NeedImports |
-		packages.NeedDeps |
-		packages.NeedModule |
-		packages.NeedTypes |
-		packages.NeedSyntax |
-		0),
-}
-
-func dumpSource(pkgMain string) {
+func dumpSource(pkgMain string) (*txtar.Archive, error) {
 	var w walker
-	w.walk(pkgMain)
+	return w.walk(pkgMain)
 }
 
 type walker struct {
 	done    map[string]bool
 	symLive map[string]bool
+	ar      *txtar.Archive
+	modPath string // only include packages from this module
+	modDir  string // module root dir, for computing relative paths
 }
 
 func (w *walker) dead(sym string) bool {
-	if !w.symLive[sym] {
-		log.Printf("DEAD: %q\n", sym)
-		return true
-	}
-	return false
+	return !w.symLive[sym]
 }
 
-func (w *walker) walk(mainPkg string) {
+func (w *walker) walk(mainPkg string) (*txtar.Archive, error) {
 	buildErrc := make(chan error, 1)
 	go func() {
 		var err error
 		w.symLive, err = buildGenLive(mainPkg)
-		j, _ := json.MarshalIndent(w.symLive, "", "\t")
-		log.Printf("live: %s", j)
 		buildErrc <- err
 	}()
 
+	cfg := &packages.Config{
+		Mode: (packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedImports |
+			packages.NeedDeps |
+			packages.NeedModule |
+			packages.NeedTypes |
+			packages.NeedSyntax),
+	}
 	pkgs, err := packages.Load(cfg, mainPkg)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	if err := <-buildErrc; err != nil {
-		log.Fatalf("building: %v", err)
+		return nil, fmt.Errorf("building: %v", err)
+	}
+
+	w.ar = &txtar.Archive{}
+	if len(pkgs) > 0 && pkgs[0].Module != nil {
+		w.modPath = pkgs[0].Module.Path
+		w.modDir = pkgs[0].Module.Dir
 	}
 
 	for _, pkg := range pkgs {
-		w.walkPackage(pkg)
+		if err := w.walkPackage(pkg); err != nil {
+			return nil, err
+		}
 	}
+	return w.ar, nil
 }
 
-func (w *walker) walkPackage(pkg *packages.Package) {
+func (w *walker) walkPackage(pkg *packages.Package) error {
 	if w.done[pkg.PkgPath] {
-		return
+		return nil
 	}
 	if w.done == nil {
 		w.done = map[string]bool{}
 	}
 	w.done[pkg.PkgPath] = true
 
-	fmt.Printf("\n### PACKAGE %v\n", pkg.PkgPath)
+	// Skip packages outside the target module (e.g. stdlib).
+	if w.modPath != "" && (pkg.Module == nil || pkg.Module.Path != w.modPath) {
+		return nil
+	}
 
 	if len(pkg.Errors) > 0 {
-		log.Fatalf("errors reading %q: %q", pkg.PkgPath, pkg.Errors)
+		return fmt.Errorf("errors reading %q: %q", pkg.PkgPath, pkg.Errors)
 	}
-
-	var imports []*packages.Package
-	for _, p := range pkg.Imports {
-		imports = append(imports, p)
-	}
-	sort.Slice(imports, func(i, j int) bool {
-		return imports[i].PkgPath < imports[j].PkgPath
-	})
-	for _, f := range pkg.GoFiles {
-		fmt.Printf("file.go %q\n", f)
-	}
-	for _, f := range pkg.OtherFiles {
-		fmt.Printf("file.other %q\n", f)
-	}
-	for _, p := range imports {
-		fmt.Printf("import %q => %q\n", pkg.PkgPath, p.PkgPath)
-	}
-	fmt.Printf("Fset: %p\n", pkg.Fset)
-	fmt.Printf("Syntax: %v\n", len(pkg.Syntax))
-	fmt.Printf("Modules: %+v\n", pkg.Module)
 
 	for i, f := range pkg.Syntax {
 		fileName := pkg.GoFiles[i]
 
-		src, err := ioutil.ReadFile(fileName)
+		src, err := os.ReadFile(fileName)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		editBuf := edit.NewBuffer(src)
 
@@ -137,8 +122,6 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 		pre := func(c *astutil.Cursor) bool {
 			depth++
 			n := c.Node()
-			//indent := strings.Repeat("  ", depth)
-			//log.Printf("%sNode: %T", indent, n)
 			switch n := n.(type) {
 			case *ast.GenDecl:
 				genDecl := n
@@ -150,7 +133,6 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 						// Nothing (yet?)
 					case *ast.TypeSpec:
 						name := typeName(pkg, spec)
-						//						log.Printf("%stype %q", indent, name)
 						if w.dead(name) {
 							start, end := offsetRange(pkg.Fset, spec)
 							dels = append(dels, delRange{start, end})
@@ -170,13 +152,11 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 				}
 			case *ast.FuncDecl:
 				name := funcName(pkg, n)
-				//log.Printf("%sfunc %q comment = %p", indent, name, n.Doc)
 				if w.dead(name) {
 					start, end := offsetRange(pkg.Fset, n)
 					editBuf.Delete(start, end)
 					return false
 				}
-				//log.Printf("%sFunc: %v", indent, name)
 			}
 			return true
 		}
@@ -186,12 +166,32 @@ func (w *walker) walkPackage(pkg *packages.Package) {
 		if fmtSrc, err := format.Source(src); err == nil {
 			src = fmtSrc
 		}
-		fmt.Printf("// Source of %s:\n\n%s\n", fileName, src)
+
+		relPath := fileName
+		if w.modDir != "" {
+			if rel, err := filepath.Rel(w.modDir, fileName); err == nil {
+				relPath = rel
+			}
+		}
+		w.ar.Files = append(w.ar.Files, txtar.File{
+			Name: relPath,
+			Data: src,
+		})
 	}
 
-	for _, p := range imports {
-		w.walkPackage(p)
+	var imports []*packages.Package
+	for _, p := range pkg.Imports {
+		imports = append(imports, p)
 	}
+	sort.Slice(imports, func(i, j int) bool {
+		return imports[i].PkgPath < imports[j].PkgPath
+	})
+	for _, p := range imports {
+		if err := w.walkPackage(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func pkgSym(pkg *packages.Package) string {
@@ -227,9 +227,6 @@ func offset(fset *token.FileSet, pos token.Pos) int {
 }
 
 func offsetRange(fset *token.FileSet, n ast.Node) (start, end int) {
-	defer func() {
-		log.Printf("offSetRange of %T = %v, %v", n, start, end)
-	}()
 	startPos, endPos := n.Pos(), n.End()
 	switch n := n.(type) {
 	case *ast.FuncDecl:
@@ -257,7 +254,7 @@ func offsetRange(fset *token.FileSet, n ast.Node) (start, end int) {
 type delRange struct{ start, end int }
 
 func buildGenLive(pkgpath string) (map[string]bool, error) {
-	tmp, err := ioutil.TempFile("", "")
+	tmp, err := os.CreateTemp("", "")
 	if err != nil {
 		return nil, err
 	}

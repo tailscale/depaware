@@ -14,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -26,6 +25,7 @@ import (
 	"github.com/pkg/diff/write"
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/imports"
+	"golang.org/x/tools/txtar"
 )
 
 var (
@@ -61,7 +61,11 @@ func Main() {
 	}
 	for i, pkg := range ipaths {
 		if *dumpSrc {
-			dumpSource(pkg)
+			ar, err := dumpSource(pkg)
+			if err != nil {
+				log.Fatal(err)
+			}
+			os.Stdout.Write(txtar.Format(ar))
 			continue
 		}
 		process(pkg)
@@ -127,7 +131,7 @@ func process(pkg string) {
 	// Parse existing depaware.txt, if present,
 	// to get the existing dependency source the file lists.
 	daFile := filepath.Join(dir, *fileName)
-	daContents, daErr := ioutil.ReadFile(daFile)
+	daContents, daErr := os.ReadFile(daFile)
 	var preferredWhy map[string]string
 	if daErr == nil {
 		preferredWhy = parsePreferredWhy(bytes.NewReader(daContents))
@@ -176,7 +180,7 @@ func process(pkg string) {
 	}
 
 	if *update {
-		if err := ioutil.WriteFile(daFile, buf.Bytes(), 0644); err != nil {
+		if err := os.WriteFile(daFile, buf.Bytes(), 0644); err != nil {
 			log.Fatal(err)
 		}
 		return

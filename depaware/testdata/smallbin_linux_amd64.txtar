@@ -1,0 +1,24 @@
+-- test/smallbin/smallbin.go --
+package main
+
+// Comment for main.
+//
+// Last line.
+func main() {
+	Foo()
+
+	var ft FooType
+	ft.ValueMethod()
+	ft.PtrMethod()
+}
+
+// Comment for Foo.
+//
+// Last line.
+func Foo() {
+	println("Foo")
+}
+
+func (FooType) ValueMethod() {}
+
+func (*FooType) PtrMethod() {}
