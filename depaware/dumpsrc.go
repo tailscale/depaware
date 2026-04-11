@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// The dumpsrc mode outputs a txtar archive of source files with dead code
+// stripped, for human consumption only. The output is not intended to compile;
+// unused imports and type definitions may remain or be missing.
+//
 // TODO: interface types are only used if their itab is used
 // TODO: other types are used if ... something? errorsString. pcln table?
 // TODO: go:linkname
@@ -11,6 +15,7 @@ package depaware
 import (
 	"bufio"
 	"bytes"
+	"debug/buildinfo"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,12 +39,84 @@ func dumpSource(pkgMain string) (*txtar.Archive, error) {
 	return w.walk(pkgMain)
 }
 
+// dumpSourceBinary reads build info from an existing binary to discover the
+// main package path, module version, and GOOS/GOARCH. It then downloads the
+// module source at that version into a temp workspace and rebuilds with
+// inlining disabled so nm can see all live symbols.
+func dumpSourceBinary(binPath string) (*txtar.Archive, error) {
+	info, err := buildinfo.ReadFile(binPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading build info from %s: %w", binPath, err)
+	}
+
+	mainPkg := info.Path
+	if mainPkg == "" {
+		return nil, fmt.Errorf("binary %s has no main package path in build info", binPath)
+	}
+
+	var goos, goarch string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "GOOS":
+			goos = s.Value
+		case "GOARCH":
+			goarch = s.Value
+		}
+	}
+
+	mainVer := info.Main.Version
+	if mainVer == "" || mainVer == "(devel)" || strings.Contains(mainVer, "+dirty") {
+		return nil, fmt.Errorf("binary %s was built from local/dirty sources (version %q); use a package path instead", binPath, mainVer)
+	}
+
+	// Create a temp workspace so we don't modify the current directory's go.mod.
+	tmpDir, err := os.MkdirTemp("", "depaware-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Write a go.mod pinning the exact module versions from the binary.
+	var gomod strings.Builder
+	gomod.WriteString("module depaware-tmp\n\ngo 1.18\n\nrequire (\n")
+	fmt.Fprintf(&gomod, "\t%s %s\n", info.Main.Path, mainVer)
+	for _, dep := range info.Deps {
+		if dep.Replace != nil {
+			fmt.Fprintf(&gomod, "\t%s %s\n", dep.Replace.Path, dep.Replace.Version)
+		} else {
+			fmt.Fprintf(&gomod, "\t%s %s\n", dep.Path, dep.Version)
+		}
+	}
+	gomod.WriteString(")\n")
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(gomod.String()), 0644); err != nil {
+		return nil, err
+	}
+
+	// Download modules into cache.
+	dlCmd := exec.Command("go", "mod", "download")
+	dlCmd.Dir = tmpDir
+	if out, err := dlCmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("go mod download: %s\n%w", out, err)
+	}
+
+	w := walker{
+		goos:   goos,
+		goarch: goarch,
+		dir:    tmpDir,
+	}
+	return w.walk(mainPkg)
+}
+
 type walker struct {
 	done    map[string]bool
 	symLive map[string]bool
 	ar      *txtar.Archive
 	modPath string // only include packages from this module
 	modDir  string // module root dir, for computing relative paths
+	goos    string // if set, override GOOS for build and package loading
+	goarch  string // if set, override GOARCH for build and package loading
+	dir     string // if set, working directory for package loading
 }
 
 func (w *walker) dead(sym string) bool {
@@ -47,10 +124,21 @@ func (w *walker) dead(sym string) bool {
 }
 
 func (w *walker) walk(mainPkg string) (*txtar.Archive, error) {
+	var env []string
+	if w.goos != "" || w.goarch != "" {
+		env = os.Environ()
+		if w.goos != "" {
+			env = append(env, "GOOS="+w.goos)
+		}
+		if w.goarch != "" {
+			env = append(env, "GOARCH="+w.goarch)
+		}
+	}
+
 	buildErrc := make(chan error, 1)
 	go func() {
 		var err error
-		w.symLive, err = buildGenLive(mainPkg)
+		w.symLive, err = buildGenLive(mainPkg, env, w.dir)
 		buildErrc <- err
 	}()
 
@@ -63,6 +151,8 @@ func (w *walker) walk(mainPkg string) (*txtar.Archive, error) {
 			packages.NeedModule |
 			packages.NeedTypes |
 			packages.NeedSyntax),
+		Env: env,
+		Dir: w.dir,
 	}
 	pkgs, err := packages.Load(cfg, mainPkg)
 	if err != nil {
@@ -130,7 +220,7 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 				for _, spec := range n.Specs {
 					switch spec := spec.(type) {
 					case *ast.ImportSpec:
-						// Nothing (yet?)
+						// Left as-is; output is for human reading, not compilation.
 					case *ast.TypeSpec:
 						name := typeName(pkg, spec)
 						if w.dead(name) {
@@ -138,7 +228,7 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 							dels = append(dels, delRange{start, end})
 						}
 					case *ast.ValueSpec:
-						// Consts and vars.
+						// Consts and vars left as-is for readability.
 					}
 				}
 				if len(dels) == len(n.Specs) {
@@ -253,22 +343,33 @@ func offsetRange(fset *token.FileSet, n ast.Node) (start, end int) {
 
 type delRange struct{ start, end int }
 
-func buildGenLive(pkgpath string) (map[string]bool, error) {
-	tmp, err := os.CreateTemp("", "")
+// buildGenLive builds pkgpath with inlining/optimization disabled and
+// returns the set of live symbols via nm.
+func buildGenLive(pkgpath string, env []string, dir string) (map[string]bool, error) {
+	tmp, err := os.CreateTemp("", "depaware-*")
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(tmp.Name())
-	// Build
-	{
-		cmd := exec.Command("go", "build", "-o", tmp.Name(), "-gcflags=all=-N -l", pkgpath)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return nil, fmt.Errorf("%v: %s\n%w", cmd, out, err)
-		}
+
+	cmd := exec.Command("go", "build", "-o", tmp.Name(), "-gcflags=all=-N -l", pkgpath)
+	if len(env) > 0 {
+		cmd.Env = env
+	}
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("%v: %s\n%w", cmd, out, err)
 	}
 
-	cmd := exec.Command("go", "tool", "nm", tmp.Name())
+	return nmLive(tmp.Name())
+}
+
+// nmLive runs "go tool nm" on a binary and returns the set of live symbols.
+func nmLive(binPath string) (map[string]bool, error) {
+	cmd := exec.Command("go", "tool", "nm", binPath)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -299,7 +400,7 @@ func buildGenLive(pkgpath string) (map[string]bool, error) {
 		syms[name] = true
 	}
 	if scan.Err() != nil {
-		return nil, err
+		return nil, scan.Err()
 	}
 	if err := cmd.Wait(); err != nil {
 		return nil, err

@@ -61,7 +61,13 @@ func Main() {
 	}
 	for i, pkg := range ipaths {
 		if *dumpSrc {
-			ar, err := dumpSource(pkg)
+			var ar *txtar.Archive
+			var err error
+			if fi, statErr := os.Stat(pkg); statErr == nil && !fi.IsDir() {
+				ar, err = dumpSourceBinary(pkg)
+			} else {
+				ar, err = dumpSource(pkg)
+			}
 			if err != nil {
 				log.Fatal(err)
 			}
