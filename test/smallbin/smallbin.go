@@ -1,6 +1,6 @@
 package main
 
-import "fmt"
+import "github.com/tailscale/depaware/test/minifmt"
 
 // Comment for main.
 //
@@ -22,7 +22,7 @@ func Foo() {
 
 // Bar is a bar.
 func Bar() {
-	fmt.Println("unused")
+	minifmt.Println("unused")
 }
 
 // UnusedType is unused.
