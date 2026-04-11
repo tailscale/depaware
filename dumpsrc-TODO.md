@@ -3,7 +3,6 @@
 ## Dead code detection gaps
 
 - **Interface types**: only used if their itab is in the binary; currently not checked
-- **Other type definitions**: structs/named types aren't tracked as live even when their methods are (e.g. `FooType` gets stripped but `FooType.ValueMethod` is kept)
 - **`go:linkname` directives**: symbols referenced via `go:linkname` bypass normal import/call graphs and won't be detected as live
 - **Constants and variables**: `ValueSpec` (const/var declarations) are never stripped; no liveness analysis for them
 - **Import cleanup**: imports are left as-is after stripping dead code, so unused imports will remain

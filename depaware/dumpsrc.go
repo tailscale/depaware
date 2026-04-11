@@ -189,6 +189,21 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 		return fmt.Errorf("errors reading %q: %q", pkg.PkgPath, pkg.Errors)
 	}
 
+	// Mark types as live if any of their methods are live.
+	for _, f := range pkg.Syntax {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv == nil {
+				continue
+			}
+			if w.symLive[funcName(pkg, fd)] {
+				if tName := recvTypeName(pkg, fd); tName != "" {
+					w.symLive[tName] = true
+				}
+			}
+		}
+	}
+
 	for i, f := range pkg.Syntax {
 		fileName := pkg.GoFiles[i]
 
@@ -296,6 +311,22 @@ func pkgSym(pkg *packages.Package) string {
 
 func typeName(pkg *packages.Package, ts *ast.TypeSpec) string {
 	return pkgSym(pkg) + "." + ts.Name.Name
+}
+
+// recvTypeName returns the type name (e.g. "main.FooType") for the
+// receiver of a method declaration, or "" if it can't be determined.
+func recvTypeName(pkg *packages.Package, fd *ast.FuncDecl) string {
+	if fd.Recv == nil || len(fd.Recv.List) == 0 {
+		return ""
+	}
+	typ := fd.Recv.List[0].Type
+	if star, ok := typ.(*ast.StarExpr); ok {
+		typ = star.X
+	}
+	if ident, ok := typ.(*ast.Ident); ok {
+		return pkgSym(pkg) + "." + ident.Name
+	}
+	return ""
 }
 
 func funcName(pkg *packages.Package, fd *ast.FuncDecl) string {

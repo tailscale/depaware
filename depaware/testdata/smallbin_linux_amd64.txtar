@@ -19,6 +19,11 @@ func Foo() {
 	println("Foo")
 }
 
+// FooType is a used type.
+type FooType struct {
+	x int
+}
+
 func (FooType) ValueMethod() {}
 
 func (*FooType) PtrMethod() {}
