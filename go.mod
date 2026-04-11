@@ -1,13 +1,13 @@
 module github.com/tailscale/depaware
 
-go 1.18
+go 1.26
 
 require (
-	github.com/pkg/diff v0.0.0-20200914180035-5b29258ca4f7
-	golang.org/x/tools v0.0.0-20201211185031-d93e913c1a58
+	github.com/pkg/diff v0.0.0-20241224192749-4e6772a4315c
+	golang.org/x/tools v0.44.0
 )
 
 require (
-	golang.org/x/mod v0.4.0 // indirect
-	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
+	golang.org/x/mod v0.35.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 )
