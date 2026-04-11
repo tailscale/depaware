@@ -124,6 +124,7 @@ type walker struct {
 	goarch string // if set, override GOARCH for build and package loading
 	cgo    string // if set, "true" or "false" for CGO_ENABLED
 	dir    string // if set, working directory for package loading
+	goroot string // GOROOT of the target go toolchain
 }
 
 func (w *walker) dead(sym string) bool {
@@ -253,6 +254,18 @@ func (w *walker) walk(mainPkg string) (*txtar.Archive, error) {
 	}
 	if w.goarch == "" {
 		w.goarch = runtime.GOARCH
+	}
+
+	// Look up GOROOT from the go toolchain that will be used,
+	// not from the depaware binary's own runtime.GOROOT().
+	if w.goroot == "" {
+		cmd := exec.Command("go", "env", "GOROOT")
+		if w.dir != "" {
+			cmd.Dir = w.dir
+		}
+		if out, err := cmd.Output(); err == nil {
+			w.goroot = strings.TrimSpace(string(out))
+		}
 	}
 
 	var env []string
@@ -475,9 +488,9 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 			if rel, err := filepath.Rel(pkg.Module.Dir, fileName); err == nil {
 				relPath = pkg.Module.Path + "/" + filepath.ToSlash(rel)
 			}
-		} else if goroot := runtime.GOROOT(); goroot != "" {
-			if rel, err := filepath.Rel(goroot, fileName); err == nil && !strings.HasPrefix(rel, "..") {
-				relPath = "go-" + goVersion() + "/" + filepath.ToSlash(rel)
+		} else if w.goroot != "" {
+			if rel, err := filepath.Rel(w.goroot, fileName); err == nil && !strings.HasPrefix(rel, "..") {
+				relPath = "GOROOT/" + filepath.ToSlash(rel)
 			}
 		}
 		w.ar.Files = append(w.ar.Files, txtar.File{
@@ -639,16 +652,6 @@ func fileIsEmpty(src []byte) bool {
 	// last import (or package clause if no imports).
 	rest := bytes.TrimSpace(src[endPos:])
 	return len(rest) == 0
-}
-
-// goVersion returns the Go version number without the "go" prefix
-// (e.g. "1.26.1").
-func goVersion() string {
-	v := runtime.Version()
-	if strings.HasPrefix(v, "go") {
-		return v[len("go"):]
-	}
-	return v
 }
 
 // buildGenLive builds pkgpath with inlining/optimization disabled and
