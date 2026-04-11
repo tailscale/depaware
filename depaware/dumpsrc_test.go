@@ -129,3 +129,35 @@ func TestDumpSourceGOOSDCE(t *testing.T) {
 		t.Errorf("'neither' branch should be stripped:\n%s", src)
 	}
 }
+
+func TestDumpSourceOverlappingEdits(t *testing.T) {
+	// Tests that a dead function containing a const-guarded if doesn't
+	// panic from overlapping edits (function deletion + if-DCE).
+	ar, err := dumpSource("github.com/tailscale/depaware/test/overlapbin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var src string
+	for _, f := range ar.Files {
+		if strings.HasSuffix(f.Name, "overlapbin/overlapbin.go") {
+			src = string(f.Data)
+			break
+		}
+	}
+	if src == "" {
+		t.Fatal("overlapbin/overlapbin.go not found in output")
+	}
+
+	// Dead function should be removed entirely.
+	if strings.Contains(src, "Dead") {
+		t.Errorf("Dead function not stripped:\n%s", src)
+	}
+	// Live function's verbose branch should be stripped.
+	if strings.Contains(src, `"verbose"`) {
+		t.Errorf("verbose branch not stripped:\n%s", src)
+	}
+	if !strings.Contains(src, `"quiet"`) {
+		t.Errorf("expected 'quiet' to be kept:\n%s", src)
+	}
+}

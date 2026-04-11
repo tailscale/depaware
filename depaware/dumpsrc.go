@@ -332,14 +332,29 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 		}
 	}
 
+	// Use CompiledGoFiles (not GoFiles) because pkg.Syntax corresponds
+	// to CompiledGoFiles. These can differ for cgo packages.
+	goFiles := pkg.CompiledGoFiles
+	if len(goFiles) != len(pkg.Syntax) {
+		goFiles = pkg.GoFiles // fallback
+	}
+
 	for i, f := range pkg.Syntax {
-		fileName := pkg.GoFiles[i]
+		if i >= len(goFiles) {
+			break
+		}
+		fileName := goFiles[i]
 
 		src, err := os.ReadFile(fileName)
 		if err != nil {
 			return err
 		}
-		editBuf := edit.NewBuffer(src)
+
+		// Collect all edits during the AST walk, then apply them in
+		// a single pass. This avoids panics from overlapping or
+		// out-of-bounds edits (e.g. an IfStmt DCE inside a region
+		// that's also being deleted by dead-function removal).
+		var edits []pendingEdit
 
 		depth := 0
 		post := func(c *astutil.Cursor) bool {
@@ -369,19 +384,18 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 					}
 				}
 				if len(dels) == len(n.Specs) {
-					// Delete the whole genspec.
 					start, end := offsetRange(pkg.Fset, genDecl)
-					editBuf.Delete(start, end)
+					edits = append(edits, pendingEdit{start, end, ""})
 				} else {
 					for _, del := range dels {
-						editBuf.Delete(del.start, del.end)
+						edits = append(edits, pendingEdit{del.start, del.end, ""})
 					}
 				}
 			case *ast.FuncDecl:
 				name := funcName(pkg, n)
 				if w.dead(name) {
 					start, end := offsetRange(pkg.Fset, n)
-					editBuf.Delete(start, end)
+					edits = append(edits, pendingEdit{start, end, ""})
 					return false
 				}
 			case *ast.IfStmt:
@@ -398,8 +412,8 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 					// Condition is true: keep the if body, drop else.
 					bodyStart := offset(pkg.Fset, n.Body.Lbrace) + 1
 					bodyEnd := offset(pkg.Fset, n.Body.Rbrace)
-					body := bytes.TrimSpace(src[bodyStart:bodyEnd])
-					editBuf.Replace(ifStart, ifEnd, string(body))
+					body := string(bytes.TrimSpace(src[bodyStart:bodyEnd]))
+					edits = append(edits, pendingEdit{ifStart, ifEnd, body})
 				} else {
 					// Condition is false: drop if body, keep else (if any).
 					if n.Else != nil {
@@ -409,10 +423,10 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 						}
 						bodyStart := offset(pkg.Fset, elseBody.Lbrace) + 1
 						bodyEnd := offset(pkg.Fset, elseBody.Rbrace)
-						body := bytes.TrimSpace(src[bodyStart:bodyEnd])
-						editBuf.Replace(ifStart, ifEnd, string(body))
+						body := string(bytes.TrimSpace(src[bodyStart:bodyEnd]))
+						edits = append(edits, pendingEdit{ifStart, ifEnd, body})
 					} else {
-						editBuf.Delete(ifStart, ifEnd)
+						edits = append(edits, pendingEdit{ifStart, ifEnd, ""})
 					}
 				}
 				return false // don't recurse into children
@@ -421,6 +435,16 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 		}
 		astutil.Apply(f, pre, post)
 
+		edits = filterEdits(edits, len(src))
+
+		editBuf := edit.NewBuffer(src)
+		for _, e := range edits {
+			if e.newText == "" {
+				editBuf.Delete(e.start, e.end)
+			} else {
+				editBuf.Replace(e.start, e.end, e.newText)
+			}
+		}
 		src = editBuf.Bytes()
 		if fmtSrc, err := goimports.Process(fileName, src, nil); err == nil {
 			src = fmtSrc
@@ -538,6 +562,47 @@ func offsetRange(fset *token.FileSet, n ast.Node) (start, end int) {
 }
 
 type delRange struct{ start, end int }
+
+type pendingEdit struct {
+	start, end int
+	newText    string // empty for deletions
+}
+
+// filterEdits removes edits with out-of-bounds offsets and edits that
+// are fully contained within a larger edit (e.g. an IfStmt DCE inside
+// a dead function that's already being deleted).
+func filterEdits(edits []pendingEdit, srcLen int) []pendingEdit {
+	// First, drop out-of-bounds edits.
+	valid := edits[:0]
+	for _, e := range edits {
+		if e.start >= 0 && e.end <= srcLen && e.start <= e.end {
+			valid = append(valid, e)
+		}
+	}
+	if len(valid) <= 1 {
+		return valid
+	}
+	// Sort by start position, then largest span first.
+	sort.Slice(valid, func(i, j int) bool {
+		if valid[i].start != valid[j].start {
+			return valid[i].start < valid[j].start
+		}
+		return valid[i].end > valid[j].end
+	})
+	// Remove edits contained within a prior edit.
+	result := valid[:0]
+	maxEnd := -1
+	for _, e := range valid {
+		if e.end <= maxEnd {
+			continue // fully contained in a previous edit
+		}
+		result = append(result, e)
+		if e.end > maxEnd {
+			maxEnd = e.end
+		}
+	}
+	return result
+}
 
 // fileIsEmpty reports whether src contains no top-level declarations
 // other than imports (i.e. only comments, package clause, and imports).
