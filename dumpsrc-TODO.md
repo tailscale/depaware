@@ -9,6 +9,10 @@
 - **Import cleanup**: imports are left as-is after stripping dead code, so unused imports will remain
 - **Constant expression DCE**: branches guarded by constant expressions like `runtime.GOOS == "android"` should be eliminated when the target GOOS is known. Currently the full function body is kept, so you see irrelevant platform-specific code paths (e.g. Android fallbacks in a linux build)
 
+## Output noise
+
+- **Empty files**: files that end up with only comments, a `package` line, and no top-level declarations (no funcs, methods, consts, vars, types) should be omitted from the txtar output entirely
+
 ## Single platform
 
 - `dumpSource` only analyzes for the current GOOS/GOARCH, unlike `process()` which iterates over multiple platforms
