@@ -109,4 +109,23 @@ func TestDumpSourceGOOSDCE(t *testing.T) {
 	if !strings.Contains(src, `"release mode"`) {
 		t.Errorf("expected 'release mode' to be kept:\n%s", src)
 	}
+	// "debug && v.check()" where debug=false: whole if is false.
+	if strings.Contains(src, `"debug and check"`) {
+		t.Errorf("debug&&check branch not stripped:\n%s", src)
+	}
+	if !strings.Contains(src, `"no debug"`) {
+		t.Errorf("expected 'no debug' to be kept:\n%s", src)
+	}
+	// "!debug && runtime.GOOS == 'linux'" where debug=false:
+	// !false=true, and GOOS=="linux" is true → whole thing is true.
+	if !strings.Contains(src, `"not debug and linux"`) {
+		t.Errorf("expected 'not debug and linux' to be kept:\n%s", src)
+	}
+	// "!debug || ..." where debug=false: !false=true → whole thing is true.
+	if !strings.Contains(src, `"not debug or android"`) {
+		t.Errorf("expected 'not debug or android' to be kept:\n%s", src)
+	}
+	if strings.Contains(src, `"neither"`) {
+		t.Errorf("'neither' branch should be stripped:\n%s", src)
+	}
 }

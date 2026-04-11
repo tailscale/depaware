@@ -127,9 +127,8 @@ func (w *walker) dead(sym string) bool {
 }
 
 // evalBoolConst checks whether expr is a statically known boolean expression.
-// It first checks the type checker's constant evaluation results, then falls
-// back to matching runtime.GOOS/runtime.GOARCH comparisons (which are
-// technically variables but effectively constant for a given build target).
+// It handles constant bools, runtime.GOOS/GOARCH comparisons, and logical
+// operators (&&, ||, !) with partial constant evaluation.
 func evalBoolConst(pkg *packages.Package, w *walker, expr ast.Expr) (result, ok bool) {
 	if pkg.TypesInfo != nil {
 		// Check if the type checker evaluated this as a constant bool.
@@ -148,6 +147,45 @@ func evalBoolConst(pkg *packages.Package, w *walker, expr ast.Expr) (result, ok 
 			}
 		}
 	}
+
+	switch e := expr.(type) {
+	case *ast.UnaryExpr:
+		if e.Op == token.NOT {
+			if val, ok := evalBoolConst(pkg, w, e.X); ok {
+				return !val, true
+			}
+		}
+	case *ast.BinaryExpr:
+		switch e.Op {
+		case token.LAND: // &&
+			lv, lok := evalBoolConst(pkg, w, e.X)
+			if lok && !lv {
+				return false, true // false && anything = false
+			}
+			rv, rok := evalBoolConst(pkg, w, e.Y)
+			if rok && !rv {
+				return false, true // anything && false = false
+			}
+			if lok && rok {
+				return lv && rv, true
+			}
+		case token.LOR: // ||
+			lv, lok := evalBoolConst(pkg, w, e.X)
+			if lok && lv {
+				return true, true // true || anything = true
+			}
+			rv, rok := evalBoolConst(pkg, w, e.Y)
+			if rok && rv {
+				return true, true // anything || true = true
+			}
+			if lok && rok {
+				return lv || rv, true
+			}
+		}
+	case *ast.ParenExpr:
+		return evalBoolConst(pkg, w, e.X)
+	}
+
 	// Fall back to matching runtime.GOOS/GOARCH comparisons.
 	return evalRuntimeGOOS(w, expr)
 }
