@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -111,9 +112,7 @@ func dumpSourceBinary(binPath string) (*txtar.Archive, error) {
 type walker struct {
 	done    map[string]bool
 	symLive map[string]bool
-	ar      *txtar.Archive
-	modPath string // only include packages from this module
-	modDir  string // module root dir, for computing relative paths
+	ar *txtar.Archive
 	goos    string // if set, override GOOS for build and package loading
 	goarch  string // if set, override GOARCH for build and package loading
 	dir     string // if set, working directory for package loading
@@ -164,16 +163,15 @@ func (w *walker) walk(mainPkg string) (*txtar.Archive, error) {
 	}
 
 	w.ar = &txtar.Archive{}
-	if len(pkgs) > 0 && pkgs[0].Module != nil {
-		w.modPath = pkgs[0].Module.Path
-		w.modDir = pkgs[0].Module.Dir
-	}
 
 	for _, pkg := range pkgs {
 		if err := w.walkPackage(pkg); err != nil {
 			return nil, err
 		}
 	}
+	sort.Slice(w.ar.Files, func(i, j int) bool {
+		return w.ar.Files[i].Name < w.ar.Files[j].Name
+	})
 	return w.ar, nil
 }
 
@@ -185,11 +183,6 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 		w.done = map[string]bool{}
 	}
 	w.done[pkg.PkgPath] = true
-
-	// Skip packages outside the target module (e.g. stdlib).
-	if w.modPath != "" && (pkg.Module == nil || pkg.Module.Path != w.modPath) {
-		return nil
-	}
 
 	if len(pkg.Errors) > 0 {
 		return fmt.Errorf("errors reading %q: %q", pkg.PkgPath, pkg.Errors)
@@ -258,9 +251,13 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 		}
 
 		relPath := fileName
-		if w.modDir != "" {
-			if rel, err := filepath.Rel(w.modDir, fileName); err == nil {
-				relPath = rel
+		if pkg.Module != nil && pkg.Module.Dir != "" {
+			if rel, err := filepath.Rel(pkg.Module.Dir, fileName); err == nil {
+				relPath = pkg.Module.Path + "/" + filepath.ToSlash(rel)
+			}
+		} else if goroot := runtime.GOROOT(); goroot != "" {
+			if rel, err := filepath.Rel(goroot, fileName); err == nil && !strings.HasPrefix(rel, "..") {
+				relPath = "go-" + goVersion() + "/" + filepath.ToSlash(rel)
 			}
 		}
 		w.ar.Files = append(w.ar.Files, txtar.File{
@@ -342,6 +339,16 @@ func offsetRange(fset *token.FileSet, n ast.Node) (start, end int) {
 }
 
 type delRange struct{ start, end int }
+
+// goVersion returns the Go version number without the "go" prefix
+// (e.g. "1.26.1").
+func goVersion() string {
+	v := runtime.Version()
+	if strings.HasPrefix(v, "go") {
+		return v[len("go"):]
+	}
+	return v
+}
 
 // buildGenLive builds pkgpath with inlining/optimization disabled and
 // returns the set of live symbols via nm.

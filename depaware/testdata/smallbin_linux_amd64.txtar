@@ -1,4 +1,4 @@
--- test/smallbin/smallbin.go --
+-- github.com/tailscale/depaware/test/smallbin/smallbin.go --
 package main
 
 // Comment for main.
