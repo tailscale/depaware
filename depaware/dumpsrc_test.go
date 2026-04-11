@@ -102,4 +102,11 @@ func TestDumpSourceGOOSDCE(t *testing.T) {
 	if strings.Contains(src, "runtime.GOOS") {
 		t.Errorf("runtime.GOOS comparison not stripped:\n%s", src)
 	}
+	// User-defined const debug=false: the "debug mode" branch should be stripped.
+	if strings.Contains(src, `"debug mode"`) {
+		t.Errorf("debug branch not stripped:\n%s", src)
+	}
+	if !strings.Contains(src, `"release mode"`) {
+		t.Errorf("expected 'release mode' to be kept:\n%s", src)
+	}
 }

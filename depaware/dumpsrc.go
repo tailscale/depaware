@@ -25,10 +25,12 @@ import (
 	"strings"
 
 	"go/ast"
+	"go/constant"
 	"go/format"
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"go/types"
 
 	"github.com/tailscale/depaware/internal/edit"
 	"golang.org/x/tools/go/ast/astutil"
@@ -124,15 +126,40 @@ func (w *walker) dead(sym string) bool {
 	return !w.symLive[sym]
 }
 
-// evalGoosGoarch evaluates comparisons of runtime.GOOS or runtime.GOARCH
-// against string literals. Returns (result, true) if the expression can be
-// statically evaluated, or (false, false) if not.
-func (w *walker) evalGoosGoarch(expr ast.Expr) (result, ok bool) {
+// evalBoolConst checks whether expr is a statically known boolean expression.
+// It first checks the type checker's constant evaluation results, then falls
+// back to matching runtime.GOOS/runtime.GOARCH comparisons (which are
+// technically variables but effectively constant for a given build target).
+func evalBoolConst(pkg *packages.Package, w *walker, expr ast.Expr) (result, ok bool) {
+	if pkg.TypesInfo != nil {
+		// Check if the type checker evaluated this as a constant bool.
+		tv, exists := pkg.TypesInfo.Types[expr]
+		if exists && tv.Value != nil && tv.Value.Kind() == constant.Bool {
+			return constant.BoolVal(tv.Value), true
+		}
+		// TypesInfo.Types excludes bare identifiers; check Uses for
+		// references to const objects (e.g. "if debug" where debug is
+		// a const bool).
+		if ident, ok := expr.(*ast.Ident); ok {
+			if obj, exists := pkg.TypesInfo.Uses[ident]; exists {
+				if c, ok := obj.(*types.Const); ok && c.Val().Kind() == constant.Bool {
+					return constant.BoolVal(c.Val()), true
+				}
+			}
+		}
+	}
+	// Fall back to matching runtime.GOOS/GOARCH comparisons.
+	return evalRuntimeGOOS(w, expr)
+}
+
+// evalRuntimeGOOS evaluates comparisons of runtime.GOOS or runtime.GOARCH
+// against string literals. These are technically variables but are fixed
+// at build time.
+func evalRuntimeGOOS(w *walker, expr ast.Expr) (result, ok bool) {
 	bin, isBin := expr.(*ast.BinaryExpr)
 	if !isBin || (bin.Op != token.EQL && bin.Op != token.NEQ) {
 		return false, false
 	}
-	// Match runtime.GOOS or runtime.GOARCH on either side.
 	var varName, litVal string
 	if sel, lit, ok := matchRuntimeSelector(bin.X, bin.Y); ok {
 		varName, litVal = sel, lit
@@ -157,8 +184,6 @@ func (w *walker) evalGoosGoarch(expr ast.Expr) (result, ok bool) {
 	return eq, true
 }
 
-// matchRuntimeSelector checks if selExpr is runtime.GOOS or runtime.GOARCH
-// and litExpr is a string literal. Returns (selector name, string value, ok).
 func matchRuntimeSelector(selExpr, litExpr ast.Expr) (string, string, bool) {
 	sel, ok := selExpr.(*ast.SelectorExpr)
 	if !ok {
@@ -176,7 +201,6 @@ func matchRuntimeSelector(selExpr, litExpr ast.Expr) (string, string, bool) {
 	if !ok || lit.Kind != token.STRING {
 		return "", "", false
 	}
-	// Strip quotes.
 	val := strings.Trim(lit.Value, `"`)
 	return name, val, true
 }
@@ -215,6 +239,7 @@ func (w *walker) walk(mainPkg string) (*txtar.Archive, error) {
 			packages.NeedDeps |
 			packages.NeedModule |
 			packages.NeedTypes |
+			packages.NeedTypesInfo |
 			packages.NeedSyntax),
 		Env: env,
 		Dir: w.dir,
@@ -325,7 +350,7 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 				if n.Init != nil {
 					break // has init statement, too complex
 				}
-				val, ok := w.evalGoosGoarch(n.Cond)
+				val, ok := evalBoolConst(pkg, w, n.Cond)
 				if !ok {
 					break
 				}
