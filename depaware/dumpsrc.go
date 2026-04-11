@@ -352,6 +352,12 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 		}
 		fileName := goFiles[i]
 
+		// Skip cgo-generated files (from the build cache) that aren't
+		// real source files.
+		if !strings.HasSuffix(fileName, ".go") || strings.Contains(fileName, "/go-build/") {
+			continue
+		}
+
 		src, err := os.ReadFile(fileName)
 		if err != nil {
 			return err
