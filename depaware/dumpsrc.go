@@ -39,8 +39,8 @@ import (
 	"golang.org/x/tools/txtar"
 )
 
-func dumpSource(pkgMain string) (*txtar.Archive, error) {
-	var w walker
+func dumpSource(pkgMain string, cgo string) (*txtar.Archive, error) {
+	w := walker{cgo: cgo}
 	return w.walk(pkgMain)
 }
 
@@ -59,13 +59,15 @@ func dumpSourceBinary(binPath string) (*txtar.Archive, error) {
 		return nil, fmt.Errorf("binary %s has no main package path in build info", binPath)
 	}
 
-	var goos, goarch string
+	var goos, goarch, cgo string
 	for _, s := range info.Settings {
 		switch s.Key {
 		case "GOOS":
 			goos = s.Value
 		case "GOARCH":
 			goarch = s.Value
+		case "CGO_ENABLED":
+			cgo = s.Value
 		}
 	}
 
@@ -108,6 +110,7 @@ func dumpSourceBinary(binPath string) (*txtar.Archive, error) {
 	w := walker{
 		goos:   goos,
 		goarch: goarch,
+		cgo:    cgo,
 		dir:    tmpDir,
 	}
 	return w.walk(mainPkg)
@@ -117,9 +120,10 @@ type walker struct {
 	done    map[string]bool
 	symLive map[string]bool
 	ar *txtar.Archive
-	goos    string // if set, override GOOS for build and package loading
-	goarch  string // if set, override GOARCH for build and package loading
-	dir     string // if set, working directory for package loading
+	goos   string // if set, override GOOS for build and package loading
+	goarch string // if set, override GOARCH for build and package loading
+	cgo    string // if set, "true" or "false" for CGO_ENABLED
+	dir    string // if set, working directory for package loading
 }
 
 func (w *walker) dead(sym string) bool {
@@ -252,13 +256,16 @@ func (w *walker) walk(mainPkg string) (*txtar.Archive, error) {
 	}
 
 	var env []string
-	if w.goos != "" || w.goarch != "" {
+	if w.goos != "" || w.goarch != "" || w.cgo != "" {
 		env = os.Environ()
 		if w.goos != "" {
 			env = append(env, "GOOS="+w.goos)
 		}
 		if w.goarch != "" {
 			env = append(env, "GOARCH="+w.goarch)
+		}
+		if w.cgo != "" {
+			env = append(env, "CGO_ENABLED="+w.cgo)
 		}
 	}
 

@@ -28,7 +28,7 @@ func TestDumpSource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := dumpSource(tt.pkgPath)
+			got, err := dumpSource(tt.pkgPath, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -70,7 +70,7 @@ func TestDumpSource(t *testing.T) {
 }
 
 func TestDumpSourceGOOSDCE(t *testing.T) {
-	ar, err := dumpSource("github.com/tailscale/depaware/test/platbin")
+	ar, err := dumpSource("github.com/tailscale/depaware/test/platbin", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestDumpSourceGOOSDCE(t *testing.T) {
 func TestDumpSourceOverlappingEdits(t *testing.T) {
 	// Tests that a dead function containing a const-guarded if doesn't
 	// panic from overlapping edits (function deletion + if-DCE).
-	ar, err := dumpSource("github.com/tailscale/depaware/test/overlapbin")
+	ar, err := dumpSource("github.com/tailscale/depaware/test/overlapbin", "")
 	if err != nil {
 		t.Fatal(err)
 	}

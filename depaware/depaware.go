@@ -37,6 +37,7 @@ var (
 	tags       = flag.String("tags", "", "comma-separated list of build tags to use when loading packages")
 	internal   = flag.Bool("internal", false, "if true, include internal packages in the output")
 	showVendor = flag.Bool("vendor", false, "if true, show the vendor/ prefix in import paths")
+	cgoFlag    = flag.String("cgo", "", "either '' (auto), 'true' or 'false' for whether cgo should be enabled")
 )
 
 func Main() {
@@ -66,7 +67,7 @@ func Main() {
 			if fi, statErr := os.Stat(pkg); statErr == nil && !fi.IsDir() {
 				ar, err = dumpSourceBinary(pkg)
 			} else {
-				ar, err = dumpSource(pkg)
+				ar, err = dumpSource(pkg, *cgoFlag)
 			}
 			if err != nil {
 				log.Fatal(err)
@@ -93,7 +94,10 @@ func process(pkg string) {
 	}
 	for _, goos := range geese {
 		env := os.Environ()
-		env = append(env, "GOARCH=amd64", "GOOS="+goos, "CGO_ENABLED=1")
+		env = append(env, "GOARCH=amd64", "GOOS="+goos)
+		if *cgoFlag != "" {
+			env = append(env, "CGO_ENABLED="+*cgoFlag)
+		}
 		cfg := &packages.Config{
 			Mode:       packages.NeedImports | packages.NeedDeps | packages.NeedFiles | packages.NeedName,
 			Env:        env,
