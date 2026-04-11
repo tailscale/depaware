@@ -1,5 +1,7 @@
 package main
 
+import "fmt"
+
 // Comment for main.
 //
 // Last line.
@@ -20,7 +22,7 @@ func Foo() {
 
 // Bar is a bar.
 func Bar() {
-	// Unused.
+	fmt.Println("unused")
 }
 
 // UnusedType is unused.

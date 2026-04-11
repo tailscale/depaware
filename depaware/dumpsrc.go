@@ -32,6 +32,7 @@ import (
 
 	"github.com/tailscale/depaware/internal/edit"
 	"golang.org/x/tools/go/ast/astutil"
+	goimports "golang.org/x/tools/imports"
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/txtar"
 )
@@ -262,7 +263,9 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 		astutil.Apply(f, pre, post)
 
 		src = editBuf.Bytes()
-		if fmtSrc, err := format.Source(src); err == nil {
+		if fmtSrc, err := goimports.Process(fileName, src, nil); err == nil {
+			src = fmtSrc
+		} else if fmtSrc, err := format.Source(src); err == nil {
 			src = fmtSrc
 		}
 
