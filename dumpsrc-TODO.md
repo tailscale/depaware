@@ -5,7 +5,7 @@
 - **Interface types**: only used if their itab is in the binary; currently not checked
 - **`go:linkname` directives**: symbols referenced via `go:linkname` bypass normal import/call graphs and won't be detected as live
 - **Constants and variables**: `ValueSpec` (const/var declarations) are never stripped; no liveness analysis for them
-- **Constant expression DCE**: branches guarded by constant expressions like `runtime.GOOS == "android"` should be eliminated when the target GOOS is known. Currently the full function body is kept, so you see irrelevant platform-specific code paths (e.g. Android fallbacks in a linux build)
+- **Broader constant expression DCE**: `runtime.GOOS`/`runtime.GOARCH` comparisons are now stripped, but other compile-time constant comparisons (e.g. user-defined const booleans) are not
 
 ## Single platform
 

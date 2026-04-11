@@ -11,6 +11,7 @@ func main() {
 	var ft FooType
 	ft.ValueMethod()
 	ft.PtrMethod()
+
 }
 
 // Comment for Foo.
@@ -54,3 +55,4 @@ type FooType struct {
 func (FooType) ValueMethod() {}
 
 func (*FooType) PtrMethod() {}
+

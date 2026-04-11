@@ -124,7 +124,71 @@ func (w *walker) dead(sym string) bool {
 	return !w.symLive[sym]
 }
 
+// evalGoosGoarch evaluates comparisons of runtime.GOOS or runtime.GOARCH
+// against string literals. Returns (result, true) if the expression can be
+// statically evaluated, or (false, false) if not.
+func (w *walker) evalGoosGoarch(expr ast.Expr) (result, ok bool) {
+	bin, isBin := expr.(*ast.BinaryExpr)
+	if !isBin || (bin.Op != token.EQL && bin.Op != token.NEQ) {
+		return false, false
+	}
+	// Match runtime.GOOS or runtime.GOARCH on either side.
+	var varName, litVal string
+	if sel, lit, ok := matchRuntimeSelector(bin.X, bin.Y); ok {
+		varName, litVal = sel, lit
+	} else if sel, lit, ok := matchRuntimeSelector(bin.Y, bin.X); ok {
+		varName, litVal = sel, lit
+	} else {
+		return false, false
+	}
+	var actual string
+	switch varName {
+	case "GOOS":
+		actual = w.goos
+	case "GOARCH":
+		actual = w.goarch
+	default:
+		return false, false
+	}
+	eq := actual == litVal
+	if bin.Op == token.NEQ {
+		eq = !eq
+	}
+	return eq, true
+}
+
+// matchRuntimeSelector checks if selExpr is runtime.GOOS or runtime.GOARCH
+// and litExpr is a string literal. Returns (selector name, string value, ok).
+func matchRuntimeSelector(selExpr, litExpr ast.Expr) (string, string, bool) {
+	sel, ok := selExpr.(*ast.SelectorExpr)
+	if !ok {
+		return "", "", false
+	}
+	ident, ok := sel.X.(*ast.Ident)
+	if !ok || ident.Name != "runtime" {
+		return "", "", false
+	}
+	name := sel.Sel.Name
+	if name != "GOOS" && name != "GOARCH" {
+		return "", "", false
+	}
+	lit, ok := litExpr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", "", false
+	}
+	// Strip quotes.
+	val := strings.Trim(lit.Value, `"`)
+	return name, val, true
+}
+
 func (w *walker) walk(mainPkg string) (*txtar.Archive, error) {
+	if w.goos == "" {
+		w.goos = runtime.GOOS
+	}
+	if w.goarch == "" {
+		w.goarch = runtime.GOARCH
+	}
+
 	var env []string
 	if w.goos != "" || w.goarch != "" {
 		env = os.Environ()
@@ -257,6 +321,38 @@ func (w *walker) walkPackage(pkg *packages.Package) error {
 					editBuf.Delete(start, end)
 					return false
 				}
+			case *ast.IfStmt:
+				if n.Init != nil {
+					break // has init statement, too complex
+				}
+				val, ok := w.evalGoosGoarch(n.Cond)
+				if !ok {
+					break
+				}
+				ifStart := offset(pkg.Fset, n.Pos())
+				ifEnd := offset(pkg.Fset, n.End())
+				if val {
+					// Condition is true: keep the if body, drop else.
+					bodyStart := offset(pkg.Fset, n.Body.Lbrace) + 1
+					bodyEnd := offset(pkg.Fset, n.Body.Rbrace)
+					body := bytes.TrimSpace(src[bodyStart:bodyEnd])
+					editBuf.Replace(ifStart, ifEnd, string(body))
+				} else {
+					// Condition is false: drop if body, keep else (if any).
+					if n.Else != nil {
+						elseBody, ok := n.Else.(*ast.BlockStmt)
+						if !ok {
+							break // else-if chain, too complex
+						}
+						bodyStart := offset(pkg.Fset, elseBody.Lbrace) + 1
+						bodyEnd := offset(pkg.Fset, elseBody.Rbrace)
+						body := bytes.TrimSpace(src[bodyStart:bodyEnd])
+						editBuf.Replace(ifStart, ifEnd, string(body))
+					} else {
+						editBuf.Delete(ifStart, ifEnd)
+					}
+				}
+				return false // don't recurse into children
 			}
 			return true
 		}

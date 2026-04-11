@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/txtar"
@@ -65,5 +66,40 @@ func TestDumpSource(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDumpSourceGOOSDCE(t *testing.T) {
+	ar, err := dumpSource("github.com/tailscale/depaware/test/platbin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Find the platbin source file.
+	var src string
+	for _, f := range ar.Files {
+		if strings.HasSuffix(f.Name, "platbin/platbin.go") {
+			src = string(f.Data)
+			break
+		}
+	}
+	if src == "" {
+		t.Fatal("platbin/platbin.go not found in output")
+	}
+
+	// The android branches should be stripped (we're building for linux).
+	if strings.Contains(src, `"android"`) {
+		t.Errorf("android branch not stripped:\n%s", src)
+	}
+	// The linux branches should be kept.
+	if !strings.Contains(src, `"not android"`) {
+		t.Errorf("expected 'not android' to be kept:\n%s", src)
+	}
+	if !strings.Contains(src, `"linux"`) {
+		t.Errorf("expected 'linux' to be kept:\n%s", src)
+	}
+	// runtime.GOOS comparisons should be gone.
+	if strings.Contains(src, "runtime.GOOS") {
+		t.Errorf("runtime.GOOS comparison not stripped:\n%s", src)
 	}
 }
