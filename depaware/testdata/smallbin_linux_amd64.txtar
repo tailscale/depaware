@@ -1,0 +1,30 @@
+-- github.com/tailscale/depaware/test/smallbin/smallbin.go --
+package main
+
+// Comment for main.
+//
+// Last line.
+func main() {
+	Foo()
+
+	var ft FooType
+	ft.ValueMethod()
+	ft.PtrMethod()
+
+}
+
+// Comment for Foo.
+//
+// Last line.
+func Foo() {
+	println("Foo")
+}
+
+// FooType is a used type.
+type FooType struct {
+	x int
+}
+
+func (FooType) ValueMethod() {}
+
+func (*FooType) PtrMethod() {}
