@@ -211,7 +211,7 @@ func process(pkg string) {
 			opts = append(opts, write.TerminalColor())
 		}
 		fmt.Fprintf(os.Stderr, "The list of dependencies in %s is out of date.\n\n", daFile)
-		err := diff.Text("before", "after", daContents, buf.Bytes(), os.Stderr, opts...)
+		err := writePatch(daFile, daContents, buf.Bytes(), os.Stderr, opts...)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -226,6 +226,19 @@ func process(pkg string) {
 	}
 
 	os.Stdout.Write(buf.Bytes())
+}
+
+func writePatch(fileName string, before, after []byte, w io.Writer, opts ...write.Option) error {
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	fileName, err = filepath.Rel(wd, fileName)
+	if err != nil {
+		return err
+	}
+	fileName = filepath.ToSlash(fileName)
+	return diff.Text(fileName, fileName, before, after, w, opts...)
 }
 
 type pkgGOOS struct {

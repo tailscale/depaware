@@ -1,10 +1,27 @@
 package depaware
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestWritePatch(t *testing.T) {
+	var got strings.Builder
+	fileName, err := filepath.Abs(filepath.Join("cmd", "example", "depaware.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writePatch(fileName, []byte("before\n"), []byte("after\n"), &got); err != nil {
+		t.Fatal(err)
+	}
+
+	wantHeaders := "--- cmd/example/depaware.txt\n+++ cmd/example/depaware.txt\n"
+	if !strings.HasPrefix(got.String(), wantHeaders) {
+		t.Fatalf("patch headers = %q, want prefix %q", got.String(), wantHeaders)
+	}
+}
 
 func TestParsePreferredWhy(t *testing.T) {
 	// in here is intentionally sloppy.
