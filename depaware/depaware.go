@@ -128,7 +128,7 @@ func process(pkg string) {
 			env = append(env, "CGO_ENABLED="+*cgoFlag)
 		}
 		cfg := &packages.Config{
-			Mode:       packages.NeedImports | packages.NeedDeps | packages.NeedFiles | packages.NeedName,
+			Mode:       packages.NeedImports | packages.NeedDeps | packages.NeedFiles | packages.NeedName | packages.NeedCompiledGoFiles,
 			Env:        env,
 			BuildFlags: buildFlags,
 		}
@@ -181,9 +181,13 @@ func process(pkg string) {
 	var osBuf bytes.Buffer
 
 	for _, pkg := range d.Deps {
-		icon := "  "
+		unsafeIcon := " "
+		cgoIcon := " "
 		if d.UsesUnsafe[pkg] && !isGoPackage(pkg) {
-			icon = "💣"
+			unsafeIcon = "U"
+		}
+		if d.UsesCGO[pkg] && !isGoPackage(pkg) {
+			cgoIcon = "C"
 		}
 		osBuf.Reset()
 		for _, goos := range geese {
@@ -194,7 +198,7 @@ func process(pkg string) {
 		if osBuf.Len() == len(geese) {
 			osBuf.Reset()
 		}
-		fmt.Fprintf(&buf, " %3s %s %-60s %s\n", osBuf.Bytes(), icon, pkg, d.Why(pkg, preferredWhy))
+		fmt.Fprintf(&buf, " %3s %s%s %-60s %s\n", osBuf.Bytes(), unsafeIcon, cgoIcon, pkg, d.Why(pkg, preferredWhy))
 	}
 
 	if *check {
@@ -252,6 +256,7 @@ type deps struct {
 
 	DepTo      map[string][]string // pkg in key is imported by packages in value
 	UsesUnsafe map[string]bool
+	UsesCGO    map[string]bool
 }
 
 func (d *deps) Why(pkg string, preferredWhy map[string]string) string {
@@ -290,12 +295,16 @@ func (d *deps) AddEdge(from, to string) {
 	if d.DepTo == nil {
 		d.DepTo = make(map[string][]string)
 		d.UsesUnsafe = make(map[string]bool)
+		d.UsesCGO = make(map[string]bool)
 	}
 	if !stringsContains(d.DepTo[to], from) {
 		d.DepTo[to] = append(d.DepTo[to], from)
 	}
-	if to == "unsafe" || to == "C" {
+	if to == "unsafe" {
 		d.UsesUnsafe[from] = true
+	}
+	if to == "runtime/cgo" {
+		d.UsesCGO[from] = true
 	}
 }
 
