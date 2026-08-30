@@ -137,6 +137,9 @@ func process(pkg string) {
 		if err != nil {
 			log.Fatalf("for GOOS=%v: %v", goos, err)
 		}
+		if packages.PrintErrors(pkgs) > 0 {
+			log.Fatalf("for GOOS=%v: package loading failed", goos)
+		}
 
 		packages.Visit(pkgs, nil, func(p *packages.Package) {
 			for _, impPkg := range p.Imports {

@@ -1,6 +1,7 @@
 package depaware
 
 import (
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -20,6 +21,18 @@ func TestWritePatch(t *testing.T) {
 	wantHeaders := "--- cmd/example/depaware.txt\n+++ cmd/example/depaware.txt\n"
 	if !strings.HasPrefix(got.String(), wantHeaders) {
 		t.Fatalf("patch headers = %q, want prefix %q", got.String(), wantHeaders)
+	}
+}
+
+func TestMainRejectsPackageLoadErrors(t *testing.T) {
+	const pkg = "github.com/tailscale/depaware/depaware/testdata/loaderror"
+	cmd := exec.Command("go", "run", "..", pkg)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("depaware succeeded for malformed package; output:\n%s", out)
+	}
+	if !strings.Contains(string(out), "example.invalid/missing") {
+		t.Fatalf("output does not contain package load error:\n%s", out)
 	}
 }
 
